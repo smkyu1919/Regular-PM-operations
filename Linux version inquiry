@@ -1,0 +1,17 @@
+#REDHAT
+HOST=$(hostname) && \
+IP=$(hostname -I 2>/dev/null | awk '{print $1}') && \
+OS_NAME=$(grep "^NAME=" /etc/os-release | cut -d= -f2 | tr -d '"') && \
+OS_VER=$(grep "^VERSION_ID=" /etc/os-release | cut -d= -f2 | tr -d '"') && \
+KERNEL_RUNNING=$(uname -r) && \
+KERNEL_INSTALLED=$(rpm -qa | grep '^kernel' | sort -V | tail -n 1) && \
+echo "HOST=${HOST} | IP=${IP} | OS=${OS_NAME} ${OS_VER} | RUNNING_KERNEL=${KERNEL_RUNNING} | LATEST_INSTALLED_KERNEL=${KERNEL_INSTALLED}"
+
+#DEBIAN
+HOST=$(hostname) && \
+IP=$(hostname -I 2>/dev/null | awk '{print $1}') && \
+OS_NAME=$(grep "^NAME=" /etc/os-release | cut -d= -f2 | tr -d '"') && \
+OS_VER=$(grep "^VERSION_ID=" /etc/os-release | cut -d= -f2 | tr -d '"') && \
+KERNEL_RUNNING=$(uname -r) && \
+KERNEL_INSTALLED=$(dpkg-query -W -f='${Package}=${Version}\n' 'linux-image-*' 2>/dev/null | sort -V | tail -n 1) && \
+echo "HOST=${HOST} | IP=${IP} | OS=${OS_NAME} ${OS_VER} | RUNNING_KERNEL=${KERNEL_RUNNING} | LATEST_INSTALLED_KERNEL=${KERNEL_INSTALLED}"
