@@ -1,0 +1,22 @@
+# 서비스 삭제
+$displayName = "서비스명"
+
+$svc = Get-Service -DisplayName $displayName -ErrorAction SilentlyContinue
+
+if ($svc) {
+
+    $name = $svc.Name   # 실제 서비스 이름 (표기되는 서비스명과 실제 서비스명이 차이가 나서 우선 수집 후 처리)
+
+    # 실행 중이면 중지
+    if ($svc.Status -ne "Stopped") {
+        Stop-Service -Name $name -Force
+    }
+
+    # 서비스 삭제 (레지스트리 + 서비스 등록 제거)
+    sc.exe delete $name | Out-Null
+
+    Write-Output "SERVICE_DELETED"
+
+} else {
+    Write-Output "SERVICE_NOT_FOUND"
+}
