@@ -1,0 +1,27 @@
+set -euo pipefail && \
+echo "STEP=PRECHECK" && \
+echo "HOST=$(hostname) | TIME=$(date '+%F %T %Z')" && \
+echo "OS=$(grep -E '^(NAME|VERSION|VERSION_ID)=' /etc/os-release | tr '\n' ' ')" && \
+echo "RUNNING_KERNEL=$(uname -r)" && \
+echo "STEP=KERNEL_HOLD" && \
+dpkg -l 'linux-image*' 'linux-modules*' 'linux-headers*' 'linux-aws' 2>/dev/null | awk '/^ii/ {print $2}' | xargs -r sudo apt-mark hold >/dev/null 2>&1 || true && \
+echo "STEP=APT_UPDATE" && \
+sudo apt-get update -y >/tmp/apt_update.log 2>&1; rc=$? && \
+if [ "$rc" -ne 0 ]; then echo "RESULT=REPO_UNREACHABLE_OR_METADATA_FAILED rc=${rc}"; tail -n 20 /tmp/apt_update.log; exit "$rc"; fi && \
+echo "STEP=SECURITY_UPGRADE" && \
+command -v unattended-upgrade >/dev/null 2>&1 || { echo "RESULT=UNATTENDED_UPGRADE_NOT_INSTALLED"; exit 2; } && \
+TS="$(date '+%Y-%m-%d %H:%M:%S')" && \
+sudo unattended-upgrade >/tmp/unattended_upgrade.log 2>&1; rc=$? && \
+if [ "$rc" -ne 0 ]; then echo "RESULT=SECURITY_UPGRADE_FAILED rc=${rc}"; tail -n 30 /tmp/unattended_upgrade.log; exit "$rc"; fi && \
+COUNT="$(sudo awk -v ts="$TS" '($0 >= ts) && ($0 ~ /( upgrade | upgraded | install | installed )/){c++} END{print c+0}' /var/log/unattended-upgrades/unattended-upgrades-dpkg.log 2>/dev/null || echo 0)" && \
+if [ "$COUNT" -eq 0 ]; then \
+  echo "RESULT=NO_SECURITY_UPDATES"; \
+  echo "ACTION=NO_REBOOT_REQUIRED"; \
+else \
+  echo "RESULT=SECURITY_UPDATES_APPLIED count=${COUNT}"; \
+  if [ -f /var/run/reboot-required ]; then \
+    echo "ACTION=REBOOT" && sudo reboot; \
+  else \
+    echo "ACTION=NO_REBOOT_REQUIRED"; \
+  fi; \
+fi
