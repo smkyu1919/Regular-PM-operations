@@ -1,0 +1,18 @@
+$kstZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("Korea Standard Time")
+
+$lastBootUtc = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+$lastBootKst = [System.TimeZoneInfo]::ConvertTime($lastBootUtc, $kstZone)
+
+Write-Output "===== Last Boot Time (KST) ====="
+Write-Output $lastBootKst
+Write-Output ""
+
+Write-Output "===== Reboot History (Last 2 Days, KST) ====="
+Get-WinEvent -FilterHashtable @{
+    LogName='System'
+    ID=6005,6006,6008,1074,41
+    StartTime=(Get-Date).AddDays(-2)
+} | Select @{
+        Name="TimeCreated(KST)"
+        Expression={[System.TimeZoneInfo]::ConvertTime($_.TimeCreated, $kstZone)}
+    }, Id, Message
