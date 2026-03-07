@@ -1,0 +1,15 @@
+#조회
+$displayName = "서비스명(보이는 명칭)"
+
+$service = Get-CimInstance Win32_Service | Where-Object {
+    $_.DisplayName -eq $displayName
+}
+
+if ($service) {
+    Write-Output "NAME        : $($service.Name)"
+    Write-Output "DISPLAYNAME : $($service.DisplayName)"
+    Write-Output "STATUS      : $($service.State)"
+    Write-Output "STARTUPTYPE : $($service.StartMode)"
+} else {
+    Write-Output "SERVICE_NOT_FOUND"
+}
