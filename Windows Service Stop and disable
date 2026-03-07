@@ -1,0 +1,18 @@
+#서비스 중지 및 사용안함
+$displayName = "OpsAuto Agent"
+
+$svc = Get-Service -DisplayName $displayName -ErrorAction SilentlyContinue
+
+if ($svc) {
+    $name = $svc.Name   # (표기되는 서비스명과 실제 서비스명이 차이로 먼저 표기되는 서비스명에 대한 실제 서비스명 추출)
+
+    if ($svc.Status -ne "Stopped") {
+        Stop-Service -Name $name -Force
+    }
+
+    Set-Service -Name $name -StartupType Disabled
+
+    Write-Output "SERVICE_STOPPED_AND_DISABLED"
+} else {
+    Write-Output "SERVICE_NOT_FOUND"
+}
