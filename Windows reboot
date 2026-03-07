@@ -1,0 +1,5 @@
+$now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+Write-Output "REBOOT_REQUEST_TIME : $now"
+
+shutdown /r /t 0 /f /d p:4:1 /c "Planned Reboot"
