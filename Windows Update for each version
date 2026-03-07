@@ -1,0 +1,191 @@
+$bucket="hdpm-hdi-cms"
+
+# =========================
+# 버전별 변수 (각 OS에 맞는 버전의 파일명을 key 변수에 갱신하고, 빌드버전 값을 kb 버전에 갱신한다. 그리고 주석 해제
+# 한 번에 여러 버전을 처리할 수는 없다. (차후 조건문 걸어서 모든 빌드버전에 사용될 수 있도록 수정할 예정)
+# =========================
+
+#### 2016
+#$key="2026pm/01/windows/windows10.0-kb5075999-x64_14f57eb68ffe81c5171c1faecb47aee6fbc6d89f.msu"
+#$kb="kb5075999"
+
+#### 2019
+#$key="2026pm/01/windows10.0-kb5075904-x64_2e5ebd48b0f010011e9196e6536a3c78cba8b56f.msu"
+#$kb="kb5075904"
+
+#### 2022
+$key="2026pm/01/windows10.0-kb5075906-x64_96e7590a40fbfde94dd84e3ed743ccd735f54654.msu"
+$kb="kb5075906"
+
+$local="C:\TempPM\windows-update-file.msu" # 파일을 S3에 받고 로컬에 저장 시 지정할 파일명
+###################################################################################################
+
+# =========================
+# 정책
+# =========================
+$AlwaysHold = $true     # 어떤 경우든 결과 출력 후 콘솔 유지(사용자가 창을 닫을 때까지)
+$HoldTickSec = 60       # 유지 중 상태 로그 주기(초)
+$TempDir = "C:\TempPM"
+
+function Hold-Forever {
+    param([string]$Reason = "HOLD")
+
+    if (-not $AlwaysHold) { return }
+
+    Write-Output "HOLD_START : reason=$Reason"
+    while ($true) {
+        Write-Output ("HOLDING : reason={0} time={1}" -f $Reason,(Get-Date))
+        Start-Sleep -Seconds $HoldTickSec
+    }
+}
+
+function Try-Remove-TempDir {
+    param([string]$Reason = "CLEANUP")
+
+    try {
+        if (Test-Path $TempDir) {
+            Remove-Item -Path $TempDir -Recurse -Force -ErrorAction Stop
+            Write-Output "TEMP_DIR_REMOVED : $TempDir : reason=$Reason"
+        } else {
+            Write-Output "TEMP_DIR_NOT_FOUND : $TempDir : reason=$Reason"
+        }
+    } catch {
+        # 삭제 실패해도 본 흐름은 유지(재부팅/홀딩 방해 금지)
+        Write-Output "TEMP_DIR_REMOVE_FAILED : $TempDir : reason=$Reason"
+        Write-Output $_.Exception.Message
+    }
+}
+
+function Stop-WithHold {
+    param(
+        [int]$Code,
+        [string]$Msg,
+        [string]$Reason = "STOP"
+    )
+    Write-Output $Msg
+    Write-Output ("RESULT_CODE : {0}" -f $Code)
+
+    Hold-Forever -Reason $Reason
+
+    # AlwaysHold=false인 경우에만 종료
+    exit $Code
+}
+
+###################################################################################################
+# 0) 작업 폴더
+New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
+###################################################################################################
+
+###################################################################################################
+# 0-1) KB 선확인 : 이미 설치된 경우 설치/재부팅 스킵 + (요구사항2) TempPM 삭제
+$kbNorm = $kb.ToUpper()
+try {
+    $already = Get-HotFix | Where-Object { $_.HotFixID -and $_.HotFixID.ToUpper() -eq $kbNorm }
+} catch {
+    Write-Output "KB_PRECHECK_WARNING : Get-HotFix query failed, will continue install flow"
+    $already = $null
+}
+
+if ($already) {
+    Write-Output "PATCH_ALREADY_INSTALLED : $kbNorm"
+    Write-Output "NO_ACTION : download/install/reboot skipped"
+
+    # (요구사항 2) ALREADY_INSTALLED 출력 후 TempPM 삭제
+    Try-Remove-TempDir -Reason "ALREADY_INSTALLED"
+
+    Stop-WithHold -Code 0 -Msg "DONE : ALREADY_INSTALLED" -Reason "ALREADY_INSTALLED"
+}
+###################################################################################################
+
+
+###################################################################################################
+# 1) AWS CLI 설치 유무 확인만 (CLI는 보통 별도 일괄 설치를 하기떄문에 CLI 사용할 수 있는지 파악만 하는 분기를 추가)
+
+$awsCmd = Get-Command aws -ErrorAction SilentlyContinue
+if (-not $awsCmd) {
+    Stop-WithHold -Code 10 -Msg "AWSCLI_NOT_FOUND : S3 download cannot proceed" -Reason "AWSCLI_NOT_FOUND"
+} else {
+    Write-Output ("AWSCLI_FOUND : " + (aws --version))
+}
+
+# 2) 자격 증명 확인
+try {
+    $id = aws sts get-caller-identity --output json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $id) {
+        Write-Output "STS_CALLER_OK"
+    } else {
+        Stop-WithHold -Code 11 -Msg "STS_CALLER_CHECK_FAILED : Unable to locate credentials / 권한 또는 role 미부여 가능" -Reason "STS_CREDENTIALS_FAIL"
+    }
+} catch {
+    Write-Output $_.Exception.Message
+    Stop-WithHold -Code 12 -Msg "STS_CALLER_EXCEPTION : Unable to locate credentials / 권한 또는 role 미부여 가능" -Reason "STS_CREDENTIALS_EXCEPTION"
+}
+###################################################################################################
+
+###################################################################################################
+# 3) S3 다운로드
+Write-Output "S3_DOWNLOAD_START"
+aws s3 cp "s3://$bucket/$key" "$local" --no-progress
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $local)) {
+    Stop-WithHold -Code 20 -Msg "S3_DOWNLOAD_FAILED : AccessDenied / BucketPolicy / KMS / EndpointPolicy 가능" -Reason "S3_DOWNLOAD_FAILED"
+}
+Write-Output "S3_DOWNLOAD_OK"
+###################################################################################################
+
+###################################################################################################
+# 4) 업데이트 설치
+Write-Output "WUSA_INSTALL_START"
+$p = Start-Process "wusa.exe" -ArgumentList "`"$local`" /quiet /norestart" -PassThru
+
+$elapsed = 0
+while (-not $p.HasExited) {
+    Write-Output ("WUSA_INSTALLING : elapsed={0}s" -f $elapsed)
+    Start-Sleep -Seconds 10
+    $elapsed += 10
+}
+
+$exit = $p.ExitCode
+Write-Output ("WUSA_INSTALL_END : exitCode={0} elapsed={1}s" -f $exit,$elapsed)
+
+if ($exit -ne 0 -and $exit -ne 3010) {
+    Stop-WithHold -Code 25 -Msg ("WUSA_INSTALL_FAILED : exitCode={0}" -f $exit) -Reason "WUSA_INSTALL_FAILED"
+}
+###################################################################################################
+
+###################################################################################################
+# 5) 설치 여부 확인
+try {
+    $installed = Get-HotFix | Where-Object { $_.HotFixID -and $_.HotFixID.ToUpper() -eq $kbNorm }
+} catch {
+    $installed = $null
+    Write-Output "KB_POSTCHECK_WARNING : Get-HotFix query failed"
+}
+
+if ($installed) {
+    Write-Output "PATCH_INSTALLED : $kbNorm"
+
+    # 이미 재부팅 필요 없는 케이스(0)면 재부팅 스킵
+    if ($exit -eq 0) {
+        Write-Output "NO_REBOOT_REQUIRED : wusa exitCode=0"
+        Stop-WithHold -Code 0 -Msg "DONE : INSTALLED_NO_REBOOT" -Reason "INSTALLED_NO_REBOOT"
+    }
+
+    # 3010이면 재부팅 필요
+    Write-Output "REBOOT_REQUIRED : wusa exitCode=3010"
+    Write-Output "REBOOT_DELAY_START : 120s"
+
+    # (요구사항 1) 120초 대기 "사이"에 TempPM 삭제
+    # - 삭제 실패해도 재부팅 흐름 방해하지 않음
+    Try-Remove-TempDir -Reason "BEFORE_REBOOT_120S_WINDOW"
+    Start-Sleep -Seconds 120
+
+    Write-Output "REBOOT_START"
+    Restart-Computer -Force
+
+    # 재부팅 호출이 실패하거나 지연될 때도 창 유지
+    Stop-WithHold -Code 0 -Msg "DONE : REBOOT_TRIGGERED" -Reason "REBOOT_TRIGGERED"
+
+} else {
+    Stop-WithHold -Code 30 -Msg "PATCH_INSTALL_FAILED : $kbNorm" -Reason "KB_NOT_FOUND_AFTER_INSTALL"
+}
+###################################################################################################
