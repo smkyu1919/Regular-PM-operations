@@ -1,0 +1,2 @@
+$cv = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+"{0} | {1} | Build(UBR)={2}.{3} | ReportTime(KST)={4:yyyy-MM-dd HH:mm:ss}" -f $env:COMPUTERNAME,$cv.ProductName,$cv.CurrentBuildNumber,$cv.UBR,(Get-Date)
